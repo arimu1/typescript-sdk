@@ -105,6 +105,8 @@ describe('createMcpHandler — subscriptions/listen', () => {
         );
         const response = await handler.fetch(listenRequest(1, { toolsListChanged: true }));
         expect(response.status).toBe(200);
+        expect(response.headers.get('cache-control')).toBe('no-cache, no-transform');
+        expect(response.headers.get('x-accel-buffering')).toBe('no');
         const [ack] = await readMessages(response, 1);
         // The factory is consulted exactly once (capabilities probe only); the
         // instance is never connected and is closed immediately after the

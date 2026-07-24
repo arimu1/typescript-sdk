@@ -413,6 +413,10 @@ export class WebStandardStreamableHTTPServerTransport implements Transport {
      * Returns a `Response` object (Web Standard)
      */
     async handleRequest(req: Request, options?: HandleRequestOptions): Promise<Response> {
+        if (this._closed) {
+            return this.createJsonErrorResponse(404, -32_001, 'Session not found');
+        }
+
         // Validate request headers for DNS rebinding protection
         const validationError = this.validateRequestHeaders(req);
         if (validationError) {
@@ -866,6 +870,12 @@ export class WebStandardStreamableHTTPServerTransport implements Transport {
                 }
             }
 
+            // Request parsing and session initialization may await user/runtime
+            // work. Do not register or dispatch after close() has swept state.
+            if (this._closed) {
+                return this.createJsonErrorResponse(404, -32_001, 'Session not found');
+            }
+
             // check if it contains requests
             const hasRequests = messages.some(element => isJSONRPCRequest(element));
 
@@ -934,7 +944,7 @@ export class WebStandardStreamableHTTPServerTransport implements Transport {
 
             const headers: Record<string, string> = {
                 'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
+                'Cache-Control': 'no-cache, no-transform',
                 Connection: 'keep-alive',
                 'X-Accel-Buffering': 'no'
             };
@@ -968,7 +978,7 @@ export class WebStandardStreamableHTTPServerTransport implements Transport {
             reclaimSseBookkeeping = () => {
                 this._streamMapping.get(streamId)?.cleanup();
                 for (const message of messages) {
-                    if (isJSONRPCRequest(message)) {
+                    if (isJSONRPCRequest(message) && this._requestToStreamMapping.get(message.id) === streamId) {
                         this._requestToStreamMapping.delete(message.id);
                     }
                 }
