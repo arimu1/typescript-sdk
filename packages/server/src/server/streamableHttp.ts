@@ -300,7 +300,10 @@ export class WebStandardStreamableHTTPServerTransport implements Transport {
     ): void {
         // A deferred arm (e.g. after an event-store await) must not outlive the
         // transport: close()'s timer sweep has already run and never runs again.
-        if (this._keepAliveMs <= 0 || this._closed) {
+        // The `> 0` polarity disables keep-alive for non-finite values (NaN
+        // fails every comparison) instead of arming a Node-clamped ~1ms
+        // interval, matching listenRouter's guard for the same-named option.
+        if (!(this._keepAliveMs > 0) || this._closed) {
             return;
         }
         this.stopKeepAlive(streamId);

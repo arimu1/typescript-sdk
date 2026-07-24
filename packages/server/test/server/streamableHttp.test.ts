@@ -1472,6 +1472,23 @@ describe('WebStandardStreamableHTTPServerTransport SSE keep-alive', () => {
         await transport.close();
     });
 
+    it('should disable keep-alive for a non-finite keepAliveMs instead of arming a clamped interval', async () => {
+        const { transport, sessionId } = await createTransport({ keepAliveMs: Number.NaN });
+
+        const response = await transport.handleRequest(createRequest('GET', undefined, { sessionId }));
+        expect(response.status).toBe(200);
+
+        // No timer may be armed: setInterval(fn, NaN) would be clamped by
+        // Node to ~1ms and flood the stream with keep-alive frames.
+        expect(vi.getTimerCount()).toBe(0);
+        const reader = response.body!.getReader();
+        await vi.advanceTimersByTimeAsync(60000);
+        const raced = await Promise.race([reader.read(), Promise.resolve('pending')]);
+        expect(raced).toBe('pending');
+
+        await transport.close();
+    });
+
     it('should stop keep-alive frames after the stream is closed', async () => {
         const { transport, sessionId } = await createTransport();
 
