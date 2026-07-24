@@ -58,6 +58,8 @@ import {
     SdkErrorCode
 } from '@modelcontextprotocol/core-internal';
 
+import { armSseKeepAlive, DEFAULT_SSE_KEEP_ALIVE_MS } from './sseKeepAlive';
+
 /**
  * How the transport shapes its HTTP response for a request:
  *
@@ -81,16 +83,14 @@ export interface PerRequestHTTPServerTransportOptions {
     responseMode?: PerRequestResponseMode;
     /**
      * Interval in milliseconds between SSE keep-alive comment frames
-     * (`: keepalive`) written while the exchange's SSE stream is open, so a
-     * long-running handler with no mid-call output doesn't idle past
-     * intermediary and server idle timeouts. Set to `0` to disable.
+     * (`: keepalive`) written while the exchange's SSE stream is open. With
+     * `responseMode: 'sse'`, this also protects long-running handlers that emit
+     * no mid-call output. Set to `0` to disable; values below `1`, above
+     * `2147483647`, or non-finite values also disable the timer.
      * @default 15000
      */
     keepAliveMs?: number;
 }
-
-/** Default interval between SSE keep-alive comment frames. */
-const DEFAULT_KEEP_ALIVE_MS = 15_000;
 
 /** Per-exchange context handed to {@linkcode PerRequestHTTPServerTransport.handleMessage}. */
 export interface PerRequestMessageExtra {
@@ -157,7 +157,7 @@ export class PerRequestHTTPServerTransport implements Transport {
     constructor(options: PerRequestHTTPServerTransportOptions) {
         this._classification = options.classification;
         this._responseMode = options.responseMode ?? 'auto';
-        this._keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS;
+        this._keepAliveMs = options.keepAliveMs ?? DEFAULT_SSE_KEEP_ALIVE_MS;
     }
 
     async start(): Promise<void> {
@@ -420,17 +420,12 @@ export class PerRequestHTTPServerTransport implements Transport {
      * already drops frames once the exchange is closed or the stream is
      * finalized, so the interval body needs no extra guards; the timer itself
      * is cleared on stream finalization and transport close.
-     * Invalid timer delays disable keep-alive rather than letting setInterval
-     * clamp them to ~1ms and flood the stream.
      */
     private startKeepAlive(): void {
-        if (!Number.isFinite(this._keepAliveMs) || this._keepAliveMs <= 0 || this._keepAliveMs > 2_147_483_647 || this._closed) {
+        if (this._closed) {
             return;
         }
-        const timer = setInterval(() => this.writeCommentFrame('keepalive'), this._keepAliveMs);
-        // Don't let the keep-alive timer hold the process open (Node.js only)
-        (timer as { unref?: () => void }).unref?.();
-        this._keepAliveTimer = timer;
+        this._keepAliveTimer = armSseKeepAlive(this._keepAliveMs, () => this.writeCommentFrame('keepalive'));
     }
 
     private stopKeepAlive(): void {

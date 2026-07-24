@@ -198,7 +198,9 @@ export interface CreateMcpHandlerOptions {
      * SSE comment-frame keepalive interval, in milliseconds, applied to every
      * SSE stream this handler serves: `subscriptions/listen` streams, modern
      * per-request exchange streams, and the legacy stateless fallback's
-     * per-request transport. Set to `0` to disable.
+     * per-request transport. In modern `auto` mode, the timer starts only after
+     * the exchange upgrades to SSE; use `responseMode: 'sse'` when a silent
+     * long-running handler needs heartbeat bytes. Set to `0` to disable.
      * @default 15000
      */
     keepAliveMs?: number;

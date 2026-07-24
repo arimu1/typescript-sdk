@@ -116,7 +116,7 @@ describe('createMcpHandler — subscriptions/listen', () => {
         await handler.close();
     });
 
-    it.each([Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
+    it.each([0.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
         'disables keep-alive for invalid keepAliveMs %s instead of arming a clamped interval',
         async keepAliveMs => {
             vi.useFakeTimers();

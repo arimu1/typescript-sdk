@@ -1475,7 +1475,7 @@ describe('WebStandardStreamableHTTPServerTransport SSE keep-alive', () => {
         await transport.close();
     });
 
-    it.each([Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
+    it.each([0.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
         'should disable keep-alive for invalid keepAliveMs %s instead of arming a clamped interval',
         async keepAliveMs => {
             const { transport, sessionId } = await createTransport({ keepAliveMs });

@@ -34,9 +34,10 @@ import { codecForVersion, MODERN_WIRE_REVISION, SERVER_INFO_META_KEY, SUBSCRIPTI
 
 import type { ServerEventBus } from './serverEventBus';
 import { honoredSubset, listenFilterAccepts, serverEventToNotification } from './serverEventBus';
+import { armSseKeepAlive, DEFAULT_SSE_KEEP_ALIVE_MS } from './sseKeepAlive';
 
 /** Default SSE comment-frame keepalive interval for listen streams. */
-export const DEFAULT_LISTEN_KEEPALIVE_MS = 15_000;
+export const DEFAULT_LISTEN_KEEPALIVE_MS = DEFAULT_SSE_KEEP_ALIVE_MS;
 
 /** Default capacity guard: refuse a new subscription when this many are already open. */
 export const DEFAULT_MAX_SUBSCRIPTIONS = 1024;
@@ -218,16 +219,7 @@ export function createListenRouter(options: ListenRouterOptions): ListenRouter {
                     writeNotification(note.method, note.params);
                 });
 
-                // Invalid timer delays disable keep-alive rather than letting
-                // setInterval clamp them to ~1ms and flood the stream.
-                if (Number.isFinite(keepAliveMs) && keepAliveMs > 0 && keepAliveMs <= 2_147_483_647) {
-                    keepAliveTimer = setInterval(() => writeFrame(': keepalive\n\n'), keepAliveMs);
-                    // Do not hold the event loop open on idle subscriptions. Node's
-                    // setInterval returns a Timeout with .unref(); browsers/Workers
-                    // return a number — the cast is an environment shim, not a
-                    // workaround for SDK typing.
-                    (keepAliveTimer as { unref?: () => void }).unref?.();
-                }
+                keepAliveTimer = armSseKeepAlive(keepAliveMs, () => writeFrame(': keepalive\n\n'));
 
                 open.add(teardown);
             },

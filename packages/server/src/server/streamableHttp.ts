@@ -19,6 +19,8 @@ import {
     SUPPORTED_PROTOCOL_VERSIONS
 } from '@modelcontextprotocol/core-internal';
 
+import { armSseKeepAlive, DEFAULT_SSE_KEEP_ALIVE_MS } from './sseKeepAlive';
+
 export type StreamId = string;
 export type EventId = string;
 
@@ -157,7 +159,8 @@ export interface WebStandardStreamableHTTPServerTransportOptions {
      *
      * Comment frames are ignored by SSE parsers and never surface as messages.
      * Defaults to `15000` (per the WHATWG SSE spec recommendation of roughly every
-     * 15 seconds). Set to `0` to disable keep-alive frames.
+     * 15 seconds). Set to `0` to disable keep-alive frames; values below `1`, above
+     * `2147483647`, or non-finite values also disable the timer.
      */
     keepAliveMs?: number;
 
@@ -173,9 +176,6 @@ export interface WebStandardStreamableHTTPServerTransportOptions {
      */
     supportedProtocolVersions?: string[];
 }
-
-/** Default interval between SSE keep-alive comment frames. */
-const DEFAULT_KEEP_ALIVE_MS = 15_000;
 
 /**
  * Options for handling a request
@@ -282,7 +282,7 @@ export class WebStandardStreamableHTTPServerTransport implements Transport {
         this._enableDnsRebindingProtection = options.enableDnsRebindingProtection ?? false;
         this._retryInterval = options.retryInterval;
         this._supportedProtocolVersions = options.supportedProtocolVersions ?? SUPPORTED_PROTOCOL_VERSIONS;
-        this._keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS;
+        this._keepAliveMs = options.keepAliveMs ?? DEFAULT_SSE_KEEP_ALIVE_MS;
     }
 
     /**
@@ -300,22 +300,20 @@ export class WebStandardStreamableHTTPServerTransport implements Transport {
     ): void {
         // A deferred arm (e.g. after an event-store await) must not outlive the
         // transport: close()'s timer sweep has already run and never runs again.
-        // Invalid timer delays disable keep-alive rather than letting
-        // setInterval clamp them to ~1ms and flood every stream.
-        if (!Number.isFinite(this._keepAliveMs) || this._keepAliveMs <= 0 || this._keepAliveMs > 2_147_483_647 || this._closed) {
+        if (this._closed) {
             return;
         }
         this.stopKeepAlive(streamId);
-        const timer = setInterval(() => {
+        const timer = armSseKeepAlive(this._keepAliveMs, () => {
             try {
                 controller.enqueue(encoder.encode(': keepalive\n\n'));
             } catch {
                 this.stopKeepAlive(streamId);
             }
-        }, this._keepAliveMs);
-        // Don't let the keep-alive timer hold the process open (Node.js only)
-        (timer as { unref?: () => void }).unref?.();
-        this._keepAliveTimers.set(streamId, timer);
+        });
+        if (timer !== undefined) {
+            this._keepAliveTimers.set(streamId, timer);
+        }
     }
 
     /**
