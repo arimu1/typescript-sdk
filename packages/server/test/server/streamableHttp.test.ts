@@ -1542,7 +1542,11 @@ describe('WebStandardStreamableHTTPServerTransport SSE keep-alive lifecycle', ()
                 await new Promise<void>(resolve => {
                     releaseReplay = resolve;
                 });
-                return 'stream-1';
+                // Resume the standalone GET stream: it skips the
+                // no-in-flight-request early close unconditionally, so the
+                // continuation genuinely reaches the keep-alive arm and only
+                // the closed-transport guard keeps the timer count at zero.
+                return '_GET_stream';
             }
         };
         const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID(), eventStore });

@@ -35,6 +35,12 @@ export interface InvokeContext {
     authInfo?: AuthInfo;
     /** Response shaping for the exchange; defaults to `auto` (lazy SSE upgrade). */
     responseMode?: PerRequestResponseMode;
+    /**
+     * SSE keep-alive comment-frame interval for the exchange's stream, in
+     * milliseconds; passed through to the per-request transport. `0` disables.
+     * @default 15000
+     */
+    keepAliveMs?: number;
 }
 
 /**
@@ -58,7 +64,8 @@ export async function invoke(
 ): Promise<Response> {
     const transport = new PerRequestHTTPServerTransport({
         classification: ctx.classification,
-        ...(ctx.responseMode !== undefined && { responseMode: ctx.responseMode })
+        ...(ctx.responseMode !== undefined && { responseMode: ctx.responseMode }),
+        ...(ctx.keepAliveMs !== undefined && { keepAliveMs: ctx.keepAliveMs })
     });
     await server.connect(transport);
     return transport.handleMessage(message, {

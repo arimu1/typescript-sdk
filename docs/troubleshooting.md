@@ -158,7 +158,7 @@ The Resource Server helpers did not move there: `requireBearerAuth`, `mcpAuthMet
 
 An idle SSE stream was killed by an intermediary or an idle-connection timeout — Node's `server.requestTimeout` defaults to 300 seconds, and reverse proxies and cloud load balancers have similar watchdogs. The client observes the dropped socket as this error (typically every ~5 minutes) and reconnects in a loop.
 
-`WebStandardStreamableHTTPServerTransport` prevents this by writing an SSE comment frame (`: keepalive`) to every open SSE stream every 15 seconds by default. Comment frames are dropped by SSE parsers before event dispatch, so they never surface as protocol messages. Tune or disable the interval with the transport's `keepAliveMs` option (`0` disables); `createMcpHandler`'s `keepAliveMs` option covers both its `subscriptions/listen` streams and the legacy fallback's per-request transport.
+The SDK's HTTP serving prevents this by writing an SSE comment frame (`: keepalive`) to every open SSE stream every 15 seconds by default — `WebStandardStreamableHTTPServerTransport` on all of its streams, and `createMcpHandler` on `subscriptions/listen` streams, modern per-request exchange streams, and the legacy fallback's per-request transport. Comment frames are dropped by SSE parsers before event dispatch, so they never surface as protocol messages. Tune or disable the interval with the `keepAliveMs` option on the transport or handler (`0` disables).
 
 If you still see this error, either keep-alive is disabled (`keepAliveMs: 0`) or an intermediary between client and server buffers or strips SSE data — check for proxies that buffer streaming responses (e.g. nginx without `proxy_buffering off`).
 

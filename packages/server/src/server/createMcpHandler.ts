@@ -145,8 +145,9 @@ export interface CreateMcpHandlerOptions {
      * - `'stateless'` (the default, also when the option is omitted) —
      *   old-school stateless serving: each legacy request is answered by a
      *   fresh instance from the same factory over a streamable HTTP transport
-     *   constructed with only `sessionIdGenerator: undefined` (the established
-     *   stateless idiom). Because serving is per-request and stateless, GET and
+     *   constructed with `sessionIdGenerator: undefined` (the established
+     *   stateless idiom), plus the handler's `keepAliveMs` when provided.
+     *   Because serving is per-request and stateless, GET and
      *   DELETE (2025 session operations) are answered with `405` /
      *   `Method not allowed.`.
      * - `'reject'` — modern-only strict: legacy-classified requests are
@@ -194,9 +195,10 @@ export interface CreateMcpHandlerOptions {
      */
     maxSubscriptions?: number;
     /**
-     * SSE comment-frame keepalive interval, in milliseconds, applied to
-     * `subscriptions/listen` streams and to the SSE streams of the legacy
-     * stateless fallback's per-request transport. Set to `0` to disable.
+     * SSE comment-frame keepalive interval, in milliseconds, applied to every
+     * SSE stream this handler serves: `subscriptions/listen` streams, modern
+     * per-request exchange streams, and the legacy stateless fallback's
+     * per-request transport. Set to `0` to disable.
      * @default 15000
      */
     keepAliveMs?: number;
@@ -296,16 +298,20 @@ function internalServerErrorResponse(id: RequestId | null = null): Response {
  * strict modern endpoint).
  *
  * Each POST is served by a fresh instance from the factory connected to a
- * fresh streamable HTTP transport constructed with only
- * `sessionIdGenerator: undefined` — the established stateless idiom, unchanged.
- * Because serving is per-request and stateless, GET and DELETE (2025 session
- * operations) are answered with `405` / `Method not allowed.`, exactly like the
- * canonical stateless example.
+ * fresh streamable HTTP transport constructed with
+ * `sessionIdGenerator: undefined` (the established stateless idiom) plus any
+ * `transportOptions`. Because serving is per-request and stateless, GET and
+ * DELETE (2025 session operations) are answered with `405` /
+ * `Method not allowed.`, exactly like the canonical stateless example.
  *
  * The optional `onerror` callback receives factory and serving failures on
  * this leg (reporting only — the response stays the 500 internal-error body).
  * The entry passes its own `onerror` here when expanding the default, so
  * legacy-leg failures are never silently swallowed.
+ *
+ * The optional `transportOptions` are threaded into each per-request
+ * transport; currently just `keepAliveMs`, the SSE keep-alive comment-frame
+ * interval (the entry forwards its own `keepAliveMs` option here).
  */
 export function legacyStatelessFallback(
     factory: McpServerFactory,
@@ -791,7 +797,8 @@ export function createMcpHandler(factory: McpServerFactory, options: CreateMcpHa
                 classification: route.classification,
                 request,
                 ...(authInfo !== undefined && { authInfo }),
-                ...(responseMode !== undefined && { responseMode })
+                ...(responseMode !== undefined && { responseMode }),
+                ...(options.keepAliveMs !== undefined && { keepAliveMs: options.keepAliveMs })
             });
             if (route.messageKind === 'notification') {
                 // Notification exchanges have no terminal response to ride the

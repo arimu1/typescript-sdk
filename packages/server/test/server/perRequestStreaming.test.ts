@@ -11,7 +11,7 @@ import {
     PROTOCOL_VERSION_META_KEY,
     setNegotiatedProtocolVersion
 } from '@modelcontextprotocol/core-internal';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PerRequestResponseMode } from '../../src/server/perRequestTransport';
 import { PerRequestHTTPServerTransport } from '../../src/server/perRequestTransport';
@@ -46,14 +46,16 @@ interface StreamingSetup {
 
 async function setup(
     handler: (ctx: ServerContext) => Promise<CallToolResult>,
-    responseMode?: PerRequestResponseMode
+    responseMode?: PerRequestResponseMode,
+    keepAliveMs?: number
 ): Promise<StreamingSetup> {
     const server = new Server({ name: 'streaming-test', version: '1.0.0' }, { capabilities: { tools: {} } });
     server.setRequestHandler('tools/call', async (_request, ctx) => handler(ctx));
     setNegotiatedProtocolVersion(server, MODERN_REVISION);
     const transport = new PerRequestHTTPServerTransport({
         classification: MODERN,
-        ...(responseMode !== undefined && { responseMode })
+        ...(responseMode !== undefined && { responseMode }),
+        ...(keepAliveMs !== undefined && { keepAliveMs })
     });
     await server.connect(transport);
     return { server, transport };
@@ -247,5 +249,104 @@ describe('disconnect is cancellation', () => {
         await reader.cancel();
         await aborted;
         expect(observedSignal?.aborted).toBe(true);
+    });
+});
+
+describe('keep-alive', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('writes keep-alive comment frames while a forced-sse exchange is streaming', async () => {
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => {
+            release = resolve;
+        });
+        const { transport } = await setup(async () => {
+            await gate;
+            return { content: [] };
+        }, 'sse');
+
+        const responsePromise = transport.handleMessage(toolsCall());
+        // The stream opened at dispatch end; the handler now idles past the
+        // default interval with no mid-call output.
+        await vi.advanceTimersByTimeAsync(15_000);
+        release();
+        const response = await responsePromise;
+        const frames = await sseFrames(response);
+        expect(frames[0]).toBe(': keepalive');
+
+        // The exchange completed and closed the transport: no timer survives.
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('writes keep-alive frames after an auto exchange upgrades to SSE', async () => {
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => {
+            release = resolve;
+        });
+        const { transport } = await setup(async ctx => {
+            await ctx.mcpReq.notify(progressNotification(1));
+            await gate;
+            return { content: [] };
+        });
+
+        const responsePromise = transport.handleMessage(toolsCall());
+        // Let the handler run, emit the upgrading notification, then idle.
+        await vi.advanceTimersByTimeAsync(15_000);
+        release();
+        const response = await responsePromise;
+        const frames = await sseFrames(response);
+        expect(frames).toContain(': keepalive');
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('does not write keep-alive frames when keepAliveMs is 0', async () => {
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => {
+            release = resolve;
+        });
+        const { transport } = await setup(
+            async () => {
+                await gate;
+                return { content: [] };
+            },
+            'sse',
+            0
+        );
+
+        const responsePromise = transport.handleMessage(toolsCall());
+        await vi.advanceTimersByTimeAsync(60_000);
+        release();
+        const response = await responsePromise;
+        const frames = await sseFrames(response);
+        expect(frames.some(frame => frame.startsWith(': keepalive'))).toBe(false);
+    });
+
+    it('disables keep-alive for a non-finite keepAliveMs instead of arming a clamped interval', async () => {
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => {
+            release = resolve;
+        });
+        const { transport } = await setup(
+            async () => {
+                await gate;
+                return { content: [] };
+            },
+            'sse',
+            Number.NaN
+        );
+
+        const responsePromise = transport.handleMessage(toolsCall());
+        expect(vi.getTimerCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(1_000);
+        release();
+        const response = await responsePromise;
+        const frames = await sseFrames(response);
+        expect(frames.some(frame => frame.startsWith(': keepalive'))).toBe(false);
     });
 });

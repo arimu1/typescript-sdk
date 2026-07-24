@@ -79,7 +79,18 @@ export interface PerRequestHTTPServerTransportOptions {
     classification: MessageClassification;
     /** Response shaping for the exchange; defaults to `auto`. */
     responseMode?: PerRequestResponseMode;
+    /**
+     * Interval in milliseconds between SSE keep-alive comment frames
+     * (`: keepalive`) written while the exchange's SSE stream is open, so a
+     * long-running handler with no mid-call output doesn't idle past
+     * intermediary and server idle timeouts. Set to `0` to disable.
+     * @default 15000
+     */
+    keepAliveMs?: number;
 }
+
+/** Default interval between SSE keep-alive comment frames. */
+const DEFAULT_KEEP_ALIVE_MS = 15_000;
 
 /** Per-exchange context handed to {@linkcode PerRequestHTTPServerTransport.handleMessage}. */
 export interface PerRequestMessageExtra {
@@ -140,10 +151,13 @@ export class PerRequestHTTPServerTransport implements Transport {
     private _deferredResponse?: DeferredResponse;
     private _sse?: SseSink;
     private _abortCleanup?: () => void;
+    private readonly _keepAliveMs: number;
+    private _keepAliveTimer?: ReturnType<typeof setInterval>;
 
     constructor(options: PerRequestHTTPServerTransportOptions) {
         this._classification = options.classification;
         this._responseMode = options.responseMode ?? 'auto';
+        this._keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS;
     }
 
     async start(): Promise<void> {
@@ -342,6 +356,7 @@ export class PerRequestHTTPServerTransport implements Transport {
 
         this._abortCleanup?.();
         this._abortCleanup = undefined;
+        this.stopKeepAlive();
 
         if (this._sse !== undefined && !this._sse.closed) {
             this._sse.closed = true;
@@ -382,6 +397,7 @@ export class PerRequestHTTPServerTransport implements Transport {
             }
         });
         this._sse = { controller, encoder: new TextEncoder(), closed: false };
+        this.startKeepAlive();
 
         this.settleResponse(
             new Response(readable, {
@@ -398,7 +414,34 @@ export class PerRequestHTTPServerTransport implements Transport {
         );
     }
 
+    /**
+     * Arms the exchange's keep-alive interval, writing an SSE comment frame
+     * every `keepAliveMs` while the stream is open. `writeCommentFrame`
+     * already drops frames once the exchange is closed or the stream is
+     * finalized, so the interval body needs no extra guards; the timer itself
+     * is cleared on stream finalization and transport close.
+     * Uses the `> 0` polarity so a non-finite value disables keep-alive
+     * instead of arming a clamped ~1ms interval.
+     */
+    private startKeepAlive(): void {
+        if (!(this._keepAliveMs > 0) || this._closed) {
+            return;
+        }
+        const timer = setInterval(() => this.writeCommentFrame('keepalive'), this._keepAliveMs);
+        // Don't let the keep-alive timer hold the process open (Node.js only)
+        (timer as { unref?: () => void }).unref?.();
+        this._keepAliveTimer = timer;
+    }
+
+    private stopKeepAlive(): void {
+        if (this._keepAliveTimer !== undefined) {
+            clearInterval(this._keepAliveTimer);
+            this._keepAliveTimer = undefined;
+        }
+    }
+
     private finalizeStream(): void {
+        this.stopKeepAlive();
         if (this._sse !== undefined && !this._sse.closed) {
             this._sse.closed = true;
             try {
