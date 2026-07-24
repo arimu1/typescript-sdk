@@ -13,7 +13,7 @@ import {
     PROTOCOL_VERSION_META_KEY,
     SUBSCRIPTION_ID_META_KEY
 } from '@modelcontextprotocol/core-internal';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createMcpHandler } from '../../src/server/createMcpHandler';
 import { McpServer } from '../../src/server/mcp';
@@ -115,6 +115,27 @@ describe('createMcpHandler — subscriptions/listen', () => {
         expect((ack as { method: string }).method).toBe('notifications/subscriptions/acknowledged');
         await handler.close();
     });
+
+    it.each([Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
+        'disables keep-alive for invalid keepAliveMs %s instead of arming a clamped interval',
+        async keepAliveMs => {
+            vi.useFakeTimers();
+            try {
+                const handler = createMcpHandler(trivialFactory(), { keepAliveMs });
+                const response = await handler.fetch(listenRequest(1, { toolsListChanged: true }));
+                const reader = response.body!.getReader();
+                await reader.read(); // acknowledgement
+                expect(vi.getTimerCount()).toBe(0);
+                await vi.advanceTimersByTimeAsync(60_000);
+                const raced = await Promise.race([reader.read(), Promise.resolve('pending')]);
+                expect(raced).toBe('pending');
+                await reader.cancel();
+                await handler.close();
+            } finally {
+                vi.useRealTimers();
+            }
+        }
+    );
 
     it('ack is the first frame, stamped with the listen id verbatim, carrying the honored subset', async () => {
         const handler = createMcpHandler(trivialFactory(), { keepAliveMs: 0 });

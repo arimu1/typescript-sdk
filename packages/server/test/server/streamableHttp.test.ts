@@ -165,6 +165,7 @@ describe('Zod v4', () => {
 
                 expect(response.status).toBe(200);
                 expect(response.headers.get('content-type')).toBe('text/event-stream');
+                expect(response.headers.get('x-accel-buffering')).toBe('no');
                 expect(response.headers.get('mcp-session-id')).toBeDefined();
             });
 
@@ -357,6 +358,7 @@ describe('Zod v4', () => {
 
                 expect(response.status).toBe(200);
                 expect(response.headers.get('content-type')).toBe('text/event-stream');
+                expect(response.headers.get('x-accel-buffering')).toBe('no');
                 expect(response.headers.get('mcp-session-id')).toBe(sessionId);
             });
 
@@ -857,6 +859,7 @@ describe('Zod v4', () => {
                 createRequest('GET', undefined, { sessionId, extraHeaders: { 'Last-Event-ID': primingId! } })
             );
             expect(reconnect.status).toBe(200);
+            expect(reconnect.headers.get('x-accel-buffering')).toBe('no');
             release();
             const replayed = await readSSEEvent(reconnect);
             expect(replayed).toContain('notifications/progress');
@@ -1472,22 +1475,26 @@ describe('WebStandardStreamableHTTPServerTransport SSE keep-alive', () => {
         await transport.close();
     });
 
-    it('should disable keep-alive for a non-finite keepAliveMs instead of arming a clamped interval', async () => {
-        const { transport, sessionId } = await createTransport({ keepAliveMs: Number.NaN });
+    it.each([Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
+        'should disable keep-alive for invalid keepAliveMs %s instead of arming a clamped interval',
+        async keepAliveMs => {
+            const { transport, sessionId } = await createTransport({ keepAliveMs });
 
-        const response = await transport.handleRequest(createRequest('GET', undefined, { sessionId }));
-        expect(response.status).toBe(200);
+            const response = await transport.handleRequest(createRequest('GET', undefined, { sessionId }));
+            expect(response.status).toBe(200);
 
-        // No timer may be armed: setInterval(fn, NaN) would be clamped by
-        // Node to ~1ms and flood the stream with keep-alive frames.
-        expect(vi.getTimerCount()).toBe(0);
-        const reader = response.body!.getReader();
-        await vi.advanceTimersByTimeAsync(60000);
-        const raced = await Promise.race([reader.read(), Promise.resolve('pending')]);
-        expect(raced).toBe('pending');
+            // No timer may be armed: setInterval with a NaN/out-of-range delay
+            // is clamped by Node to ~1ms and would flood the stream with
+            // keep-alive frames.
+            expect(vi.getTimerCount()).toBe(0);
+            const reader = response.body!.getReader();
+            await vi.advanceTimersByTimeAsync(60000);
+            const raced = await Promise.race([reader.read(), Promise.resolve('pending')]);
+            expect(raced).toBe('pending');
 
-        await transport.close();
-    });
+            await transport.close();
+        }
+    );
 
     it('should stop keep-alive frames after the stream is closed', async () => {
         const { transport, sessionId } = await createTransport();
@@ -1581,10 +1588,18 @@ describe('WebStandardStreamableHTTPServerTransport SSE keep-alive lifecycle', ()
         // Close the transport mid-await, then let the replay continuation run
         await transport.close();
         releaseReplay?.();
-        await pendingGet;
+        const replayResponse = await pendingGet;
 
         // The deferred continuation must not have armed a timer close() can never sweep
         expect(vi.getTimerCount()).toBe(0);
+
+        // The continuation must not re-register the stream on the closed
+        // transport: the client observes stream end instead of hanging on a
+        // dead session, and a later resume isn't 409-blocked by a stale entry.
+        const { done } = await replayResponse.body!.getReader().read();
+        expect(done).toBe(true);
+        const internals = transport as unknown as { _streamMapping: Map<string, unknown> };
+        expect(internals._streamMapping.size).toBe(0);
     });
 
     it('should not leak a keep-alive timer when the priming event write fails on a POST SSE stream', async () => {
@@ -1616,7 +1631,7 @@ describe('WebStandardStreamableHTTPServerTransport SSE keep-alive lifecycle', ()
         expect(vi.getTimerCount()).toBe(0);
         storeFails = true;
 
-        const response = await transport.handleRequest(
+        await transport.handleRequest(
             createRequest(
                 'POST',
                 { jsonrpc: '2.0', method: 'tools/call', params: { name: 'noop', arguments: {} }, id: 'call-1' } as JSONRPCMessage,
@@ -1625,10 +1640,19 @@ describe('WebStandardStreamableHTTPServerTransport SSE keep-alive lifecycle', ()
                 }
             )
         );
-        expect(response.status).toBe(400);
 
         // The discarded stream must not carry a permanently-firing timer
         expect(vi.getTimerCount()).toBe(0);
+
+        // The stream bookkeeping registered before the failed priming write
+        // must be reclaimed too: repeated failures during an event-store
+        // outage must not accrete orphaned stream entries or request mappings.
+        const internals = transport as unknown as {
+            _streamMapping: Map<string, unknown>;
+            _requestToStreamMapping: Map<unknown, string>;
+        };
+        expect(internals._streamMapping.size).toBe(0);
+        expect(internals._requestToStreamMapping.size).toBe(0);
 
         await transport.close();
     });

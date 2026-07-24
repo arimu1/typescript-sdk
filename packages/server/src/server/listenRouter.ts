@@ -218,7 +218,9 @@ export function createListenRouter(options: ListenRouterOptions): ListenRouter {
                     writeNotification(note.method, note.params);
                 });
 
-                if (keepAliveMs > 0) {
+                // Invalid timer delays disable keep-alive rather than letting
+                // setInterval clamp them to ~1ms and flood the stream.
+                if (Number.isFinite(keepAliveMs) && keepAliveMs > 0 && keepAliveMs <= 2_147_483_647) {
                     keepAliveTimer = setInterval(() => writeFrame(': keepalive\n\n'), keepAliveMs);
                     // Do not hold the event loop open on idle subscriptions. Node's
                     // setInterval returns a Timeout with .unref(); browsers/Workers

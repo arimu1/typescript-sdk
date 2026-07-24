@@ -327,26 +327,29 @@ describe('keep-alive', () => {
         expect(frames.some(frame => frame.startsWith(': keepalive'))).toBe(false);
     });
 
-    it('disables keep-alive for a non-finite keepAliveMs instead of arming a clamped interval', async () => {
-        let release!: () => void;
-        const gate = new Promise<void>(resolve => {
-            release = resolve;
-        });
-        const { transport } = await setup(
-            async () => {
-                await gate;
-                return { content: [] };
-            },
-            'sse',
-            Number.NaN
-        );
+    it.each([Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
+        'disables keep-alive for invalid keepAliveMs %s instead of arming a clamped interval',
+        async keepAliveMs => {
+            let release!: () => void;
+            const gate = new Promise<void>(resolve => {
+                release = resolve;
+            });
+            const { transport } = await setup(
+                async () => {
+                    await gate;
+                    return { content: [] };
+                },
+                'sse',
+                keepAliveMs
+            );
 
-        const responsePromise = transport.handleMessage(toolsCall());
-        expect(vi.getTimerCount()).toBe(0);
-        await vi.advanceTimersByTimeAsync(1_000);
-        release();
-        const response = await responsePromise;
-        const frames = await sseFrames(response);
-        expect(frames.some(frame => frame.startsWith(': keepalive'))).toBe(false);
-    });
+            const responsePromise = transport.handleMessage(toolsCall());
+            expect(vi.getTimerCount()).toBe(0);
+            await vi.advanceTimersByTimeAsync(1_000);
+            release();
+            const response = await responsePromise;
+            const frames = await sseFrames(response);
+            expect(frames.some(frame => frame.startsWith(': keepalive'))).toBe(false);
+        }
+    );
 });

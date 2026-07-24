@@ -420,11 +420,11 @@ export class PerRequestHTTPServerTransport implements Transport {
      * already drops frames once the exchange is closed or the stream is
      * finalized, so the interval body needs no extra guards; the timer itself
      * is cleared on stream finalization and transport close.
-     * Uses the `> 0` polarity so a non-finite value disables keep-alive
-     * instead of arming a clamped ~1ms interval.
+     * Invalid timer delays disable keep-alive rather than letting setInterval
+     * clamp them to ~1ms and flood the stream.
      */
     private startKeepAlive(): void {
-        if (!(this._keepAliveMs > 0) || this._closed) {
+        if (!Number.isFinite(this._keepAliveMs) || this._keepAliveMs <= 0 || this._keepAliveMs > 2_147_483_647 || this._closed) {
             return;
         }
         const timer = setInterval(() => this.writeCommentFrame('keepalive'), this._keepAliveMs);

@@ -156,11 +156,11 @@ The Resource Server helpers did not move there: `requireBearerAuth`, `mcpAuthMet
 
 ## `SSE stream disconnected: TypeError: terminated`
 
-An idle SSE stream was killed by an intermediary or an idle-connection timeout — Node's `server.requestTimeout` defaults to 300 seconds, and reverse proxies and cloud load balancers have similar watchdogs. The client observes the dropped socket as this error (typically every ~5 minutes) and reconnects in a loop.
+An idle SSE response went too long without delivering body bytes. A client-side body-idle timeout (for example undici's `bodyTimeout`) or an intermediary such as a reverse proxy or cloud load balancer may then terminate the stream. The client observes this as `TypeError: terminated` and reconnects in a loop.
 
 The SDK's HTTP serving prevents this by writing an SSE comment frame (`: keepalive`) to every open SSE stream every 15 seconds by default — `WebStandardStreamableHTTPServerTransport` on all of its streams, and `createMcpHandler` on `subscriptions/listen` streams, modern per-request exchange streams, and the legacy fallback's per-request transport. Comment frames are dropped by SSE parsers before event dispatch, so they never surface as protocol messages. Tune or disable the interval with the `keepAliveMs` option on the transport or handler (`0` disables).
 
-If you still see this error, either keep-alive is disabled (`keepAliveMs: 0`) or an intermediary between client and server buffers or strips SSE data — check for proxies that buffer streaming responses (e.g. nginx without `proxy_buffering off`).
+If you still see this error, keep-alive may be disabled (`keepAliveMs: 0`), the client timeout may be shorter than the configured interval, or an intermediary may buffer or strip SSE data. Check for proxies that buffer streaming responses (for example nginx without `proxy_buffering off`).
 
 ## Recap
 
